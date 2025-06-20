@@ -1,0 +1,26 @@
+{
+  "name": "indigo-autopilot",
+  "version": "1.0.0",
+  "description": "Automated CDP management for Indigo Protocol on Cardano",
+  "private": true,
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "dev": "npm run dev --workspace=packages/backend",
+    "dev:backend": "npm run dev --workspace=packages/backend",
+    "test": "npm run test --workspaces",
+    "lint": "npm run lint --workspaces",
+    "clean": "npm run clean --workspaces"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3",
+    "@types/node": "^20.10.5",
+    "concurrently": "^8.2.2"
+  }
+} 
