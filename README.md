@@ -61,18 +61,10 @@ STRATEGY_addr1qys3t6znptaw4zy={"walletAddress":"your_full_wallet_address","enabl
 ```bash
 # From project root
 npm install
-
-# Build shared and backend packages
 npm run build
 
 # Start the bot
 npm run dev:backend
-
-# Or from backend directory
-cd packages/backend
-npm install
-npm run build
-npm run start
 ```
 
 The bot will automatically start managing your CDPs based on your strategy.

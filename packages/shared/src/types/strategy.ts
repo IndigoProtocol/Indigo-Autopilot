@@ -1,11 +1,10 @@
-// Strategy type definitions
 export interface IUserStrategy {
   walletAddress: string;
   enabled: boolean;
   minCR: number;
   maxCR: number;
   targetCR: number;
-  enabledAssets?: string[]; // Assets this strategy applies to (e.g., ['iUSD', 'iBTC'])
+  enabledAssets?: string[];
 }
 
 export interface IStrategyAction {
