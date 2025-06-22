@@ -26,12 +26,16 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "clean": "rm -rf dist",
+    "lint": "eslint src --ext .ts",
     "prepublishOnly": "npm run build"
   },
   "engines": {
     "node": ">=20.0.0"
   },
   "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^8.34.1",
+    "@typescript-eslint/parser": "^8.34.1",
+    "eslint": "^8.57.1",
     "typescript": "^5.3.3"
   }
 } 

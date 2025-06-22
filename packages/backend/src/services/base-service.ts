@@ -1,5 +1,5 @@
-import logger from '../utils/logger.js';
-import { handleServiceError } from '../utils/error-handler.js';
+import logger from '../utils/logger';
+import { handleServiceError } from '../utils/error-handler';
 
 /**
  * Base service class with common initialization patterns and error handling

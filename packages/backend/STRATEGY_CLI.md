@@ -1,58 +1,77 @@
 # Strategy CLI Commands
 
-Simple commands to manage your CDP strategies.
+Simple commands to manage your CDP strategies with per-asset configuration.
 
 ## Update Strategy
 
-Update strategy parameters for your wallet:
+Update strategy parameters for specific assets in your wallet:
 
 ```bash
-npm run strategy-cli update <wallet_address> [options]
+npm run strategy-cli update <wallet_address> --assets=<assets> [options]
 ```
 
 **Options:**
-- `--enabled=true|false` - Enable/disable strategy
+- `--assets=iUSD,iBTC` - Assets to configure (comma-separated, **REQUIRED**)
+- `--enabled=true|false` - Enable/disable strategy for specified assets
 - `--target-cr=160` - Target collateral ratio (%)
 - `--min-cr=140` - Minimum CR (bot deposits when below)
 - `--max-cr=180` - Maximum CR (bot withdraws when above)
-- `--assets=iUSD,iBTC` - Assets to manage (comma-separated)
 
 **Examples:**
 ```bash
-# Set strategy for iUSD with 160% target CR
-npm run strategy-cli update addr1... --target-cr=160 --min-cr=150 --max-cr=170 --assets=iUSD
+# Set strategy for iBTC with 200% target CR
+npm run strategy-cli update addr1... --assets=iBTC --target-cr=200 --min-cr=195 --max-cr=205
 
-# Enable multiple assets
-npm run strategy-cli update addr1... --assets=iUSD,iBTC --enabled=true
+# Set different strategy for iUSD
+npm run strategy-cli update addr1... --assets=iUSD --target-cr=160 --min-cr=150 --max-cr=170
 
-# Disable strategy
-npm run strategy-cli update addr1... --enabled=false
+# Configure multiple assets with same parameters
+npm run strategy-cli update addr1... --assets=iETH,iSOL --target-cr=180 --min-cr=170 --max-cr=190
+
+# Enable/disable specific assets
+npm run strategy-cli update addr1... --assets=iBTC --enabled=false
 ```
 
 ## Get Strategy Status
 
-View current strategy and CDP analysis:
+View current per-asset strategies and CDP analysis:
 
 ```bash
 npm run strategy-cli get <wallet_address>
 ```
 
 This shows:
-- Current strategy settings
-- Your CDPs and their status
-- What actions the bot will take
+- Current strategy settings for each asset
+- Your CDPs and their status per asset
+- What actions the bot will take for each CDP
 
 ## Remove Strategy
 
-Remove strategy configuration:
+Remove strategy configuration (entire wallet or specific assets):
 
 ```bash
+# Remove specific asset strategies
+npm run strategy-cli remove <wallet_address> <asset1> <asset2>
+
+# Remove all strategies for wallet
 npm run strategy-cli remove <wallet_address>
+```
+
+**Examples:**
+```bash
+# Remove strategies for specific assets
+npm run strategy-cli remove addr1... iBTC iUSD
+
+# Remove all strategies
+npm run strategy-cli remove addr1...
 ```
 
 ## How It Works
 
-- **Target CR**: Where bot tries to maintain your collateral ratio
-- **Min CR**: Bot deposits ADA when CR drops below this
-- **Max CR**: Bot withdraws ADA when CR goes above this
-- **Assets**: Only manage CDPs for specified assets (iUSD, iBTC, iETH, iSOL) 
+**Strategy Flow:**
+1. Bot checks each CDP's asset type
+2. Looks up asset-specific strategy (if configured)
+3. For each managed asset:
+   - CR < minCR → Bot deposits collateral to reach targetCR
+   - CR > maxCR → Bot withdraws collateral to reach targetCR
+   - minCR ≤ CR ≤ maxCR → Bot takes no action 

@@ -1,10 +1,16 @@
+export interface IAssetStrategy {
+  targetCR: number;
+  minCR: number;
+  maxCR: number;
+  enabled: boolean;
+}
+
 export interface IUserStrategy {
   walletAddress: string;
   enabled: boolean;
-  minCR: number;
-  maxCR: number;
-  targetCR: number;
-  enabledAssets?: string[];
+  assetStrategies: {
+    [assetName: string]: IAssetStrategy;
+  };
 }
 
 export interface IStrategyAction {

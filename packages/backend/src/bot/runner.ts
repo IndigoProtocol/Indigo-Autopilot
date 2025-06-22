@@ -1,13 +1,9 @@
-import cron from 'node-cron';
-import {StrategyEngineService} from '../services/strategy-engine.service';
-import {CDPManagerService} from '../services/cdp-manager.service';
-import {WalletManagerService} from '../services/wallet-manager.service';
-
-import {IStrategyAction, IUserStrategy} from '@cdp-bot/shared';
+import { IUserStrategy, IStrategyAction } from '@cdp-bot/shared';
+import { StrategyEngineService, CDPManagerService, WalletManagerService, serviceRegistry } from '../services';
 import logger from '../utils/logger';
-import { maskAddress } from '../utils/common.js';
-import { reloadEnvironmentVariables, logStrategyAndCDPStatus } from '../utils/bot-utils.js';
-import { getService, initializeAllServices } from '../services/index.js';
+import { maskAddress, formatPricesForLogging } from '../utils/common';
+import * as cron from 'node-cron';
+import { reloadEnvironmentVariables, logStrategyAndCDPStatus } from '../utils/bot-utils';
 
 export class BotRunner {
   private _strategyEngine?: StrategyEngineService;
@@ -20,21 +16,21 @@ export class BotRunner {
 
   private get strategyEngine(): StrategyEngineService {
     if (!this._strategyEngine) {
-      this._strategyEngine = getService<StrategyEngineService>('StrategyEngineService');
+      this._strategyEngine = serviceRegistry.get<StrategyEngineService>('StrategyEngineService');
     }
     return this._strategyEngine;
   }
 
   private get cdpManager(): CDPManagerService {
     if (!this._cdpManager) {
-      this._cdpManager = getService<CDPManagerService>('CDPManagerService');
+      this._cdpManager = serviceRegistry.get<CDPManagerService>('CDPManagerService');
     }
     return this._cdpManager;
   }
 
   private get walletManager(): WalletManagerService {
     if (!this._walletManager) {
-      this._walletManager = getService<WalletManagerService>('WalletManagerService');
+      this._walletManager = serviceRegistry.get<WalletManagerService>('WalletManagerService');
     }
     return this._walletManager;
   }
@@ -44,17 +40,17 @@ export class BotRunner {
    */
   async initialize(): Promise<void> {
     try {
-      await initializeAllServices();
-      logger.info('✅ BotRunner initialized successfully');
+      await this.strategyEngine.initialize();
+      await this.cdpManager.initialize();
+      await this.walletManager.initialize();
     } catch (error) {
-      logger.error('Failed to initialize BotRunner:', error);
+      logger.error('❌ Failed to initialize bot runner:', error);
       throw error;
     }
   }
 
   /**
-   * Start the bot runner with cron schedule
-   * Runs every 1 minute by default
+   * Start the bot with cron schedule
    */
   start(cronSchedule: string = '*/1 * * * *'): void {
     if (this.isRunning) {
@@ -73,36 +69,35 @@ export class BotRunner {
   }
 
   /**
-   * Stop the bot runner
+   * Stop the bot
    */
   stop(): void {
-    if (!this.isRunning || !this.cronJob) {
-      logger.warn('Bot runner is not running');
+    if (!this.isRunning) {
       return;
     }
 
-    this.cronJob.stop();
+    if (this.cronJob) {
+      this.cronJob.stop();
+      this.cronJob = undefined;
+    }
+
     this.isRunning = false;
-    logger.info('Bot runner stopped');
   }
 
   /**
-   * Execute one complete bot cycle
+   * Execute bot cycle
    */
   private async executeBotCycle(): Promise<void> {
-    logger.info('Starting bot execution cycle');
-
     try {
-      const activeStrategies = await this.loadActiveStrategies();
-      
-      if (activeStrategies.length === 0) {
-        logger.info('No active strategies found');
-        return;
-      }
-
       const currentPrices = await this.cdpManager.getCurrentPrices();
       if (!currentPrices) {
         logger.error('Unable to fetch current prices, skipping cycle');
+        return;
+      }
+
+      const activeStrategies = await this.loadActiveStrategies();
+      if (activeStrategies.length === 0) {
+        logger.info('No active strategies found, skipping cycle');
         return;
       }
 
@@ -111,7 +106,8 @@ export class BotRunner {
         walletManager: this.walletManager
       });
 
-      const cycleResults = [];
+      const cycleResults: any[] = [];
+
       for (const strategy of activeStrategies) {
         try {
           const result = await this.processUserStrategy(strategy, currentPrices);
@@ -137,12 +133,7 @@ export class BotRunner {
         totalStrategies: activeStrategies.length,
         successfulStrategies,
         totalActionsExecuted,
-        prices: {
-          iUSD: currentPrices.iUSD.toString(),
-          iBTC: currentPrices.iBTC.toString(),
-          iETH: currentPrices.iETH.toString(),
-          iSOL: currentPrices.iSOL.toString(),
-        }
+        prices: formatPricesForLogging(currentPrices)
       });
 
     } catch (error) {
@@ -251,10 +242,25 @@ export class BotRunner {
           const strategy: IUserStrategy = {
             walletAddress,
             enabled: strategyConfig.enabled !== false,
-            minCR: strategyConfig.minCR || 150,
-            maxCR: strategyConfig.maxCR || 175,
-            targetCR: strategyConfig.targetCR || 160,
+            assetStrategies: strategyConfig.assetStrategies || {},
           };
+
+          if (Object.keys(strategy.assetStrategies).length === 0 && 
+              (strategyConfig.minCR || strategyConfig.maxCR || strategyConfig.targetCR)) {
+            logger.warn('Converting legacy strategy format to per-asset format', {
+              walletAddress: maskAddress(walletAddress)
+            });
+            
+            const assets = strategyConfig.enabledAssets;
+            for (const asset of assets) {
+              strategy.assetStrategies[asset] = {
+                enabled: true,
+                minCR: strategyConfig.minCR,
+                maxCR: strategyConfig.maxCR,
+                targetCR: strategyConfig.targetCR,
+              };
+            }
+          }
 
           const validation = this.strategyEngine.validateStrategy(strategy);
           if (!validation.isValid) {
@@ -296,7 +302,4 @@ export class BotRunner {
     logger.info('Running bot cycle manually');
     await this.executeBotCycle();
   }
-
-
-
 }

@@ -1,10 +1,10 @@
-import { IUserStrategy, ICDP, IStrategyAction, IAssetPrices } from '@cdp-bot/shared';
+import { IUserStrategy, ICDP, IStrategyAction, IAssetPrices, IAssetStrategy } from '@cdp-bot/shared';
 import { CDPManagerService } from './cdp-manager.service';
 import { WalletManagerService } from './wallet-manager.service';
 import logger from '../utils/logger';
-import { maskAddress, getAssetPrice, delay } from '../utils/common.js';
-import { BaseService } from './base-service.js';
-import { serviceRegistry } from './service-registry.js';
+import { maskAddress, getAssetPrice, delay } from '../utils/common';
+import { BaseService } from './base-service';
+import { serviceRegistry } from './service-registry';
 
 export class StrategyEngineService extends BaseService {
   private _cdpManager?: CDPManagerService;
@@ -89,12 +89,23 @@ export class StrategyEngineService extends BaseService {
     prices: IAssetPrices
   ): Promise<IStrategyAction> {
     try {
+      const assetStrategy = strategy.assetStrategies[cdp.assetType];
+      if (!assetStrategy || !assetStrategy.enabled) {
+        return {
+          type: 'NO_ACTION',
+          cdpId: cdp.cdpId,
+          targetCR: 0,
+          currentCR: 0,
+          reason: `No enabled strategy configured for asset: ${cdp.assetType}`,
+        };
+      }
+
       const assetPrice = getAssetPrice(cdp.assetType, prices);
       if (assetPrice === BigInt(0)) {
         return {
           type: 'NO_ACTION',
           cdpId: cdp.cdpId,
-          targetCR: strategy.targetCR,
+          targetCR: assetStrategy.targetCR,
           currentCR: 0,
           reason: `No price data available for asset: ${cdp.assetType}`,
         };
@@ -108,26 +119,26 @@ export class StrategyEngineService extends BaseService {
 
       cdp.currentCR = currentCR;
 
-      if (currentCR > strategy.maxCR) {
-        return await this.createWithdrawAction(cdp, strategy, assetPrice, currentCR);
-      } else if (currentCR < strategy.minCR) {
-        return await this.createDepositAction(cdp, strategy, assetPrice, currentCR);
+      if (currentCR > assetStrategy.maxCR) {
+        return await this.createWithdrawAction(cdp, assetStrategy, assetPrice, currentCR);
+      } else if (currentCR < assetStrategy.minCR) {
+        return await this.createDepositAction(cdp, assetStrategy, assetPrice, currentCR, strategy.walletAddress);
       } else {
         return {
           type: 'NO_ACTION',
           cdpId: cdp.cdpId,
-          targetCR: strategy.targetCR,
+          targetCR: assetStrategy.targetCR,
           currentCR,
-          reason: `CR ${currentCR}% is within acceptable range (${strategy.minCR}% - ${strategy.maxCR}%)`,
+          reason: `CR ${currentCR}% is within acceptable range (${assetStrategy.minCR}% - ${assetStrategy.maxCR}%)`,
         };
       }
 
     } catch (error) {
-      logger.error('Failed to evaluate CDP strategy:', { cdpId: cdp.cdpId, error });
+      logger.error('❌ Failed to evaluate CDP strategy:', { cdpId: cdp.cdpId, error });
       return {
         type: 'NO_ACTION',
         cdpId: cdp.cdpId,
-        targetCR: strategy.targetCR,
+        targetCR: 0,
         currentCR: 0,
         reason: `Error evaluating CDP: ${error}`,
       };
@@ -139,13 +150,12 @@ export class StrategyEngineService extends BaseService {
    */
   private async createWithdrawAction(
     cdp: ICDP,
-    strategy: IUserStrategy,
+    assetStrategy: IAssetStrategy,
     assetPrice: bigint,
     currentCR: number
   ): Promise<IStrategyAction> {
     try {
       const maxWithdrawalPercentage = 80;
-      const minAbsoluteCR = 120;
       const emergencyStopCR = 115;
       const maxTransactionValue = BigInt(10000_000_000); // 10K ADA
 
@@ -153,7 +163,7 @@ export class StrategyEngineService extends BaseService {
         return {
           type: 'NO_ACTION',
           cdpId: cdp.cdpId,
-          targetCR: strategy.targetCR,
+          targetCR: assetStrategy.targetCR,
           currentCR,
           reason: `Emergency stop triggered: CR ${currentCR}% at/below emergency threshold ${emergencyStopCR}%`,
         };
@@ -163,7 +173,7 @@ export class StrategyEngineService extends BaseService {
         cdp.collateralAmount,
         cdp.mintedAmount,
         assetPrice,
-        strategy.targetCR
+        assetStrategy.targetCR
       );
 
       const withdrawAmount = calculation.adjustmentAmount < 0 ? -calculation.adjustmentAmount : BigInt(0);
@@ -172,7 +182,7 @@ export class StrategyEngineService extends BaseService {
         return {
           type: 'NO_ACTION',
           cdpId: cdp.cdpId,
-          targetCR: strategy.targetCR,
+          targetCR: assetStrategy.targetCR,
           currentCR,
           reason: 'Calculated withdrawal amount is not positive',
         };
@@ -180,50 +190,26 @@ export class StrategyEngineService extends BaseService {
 
       const maxWithdrawPercentageValue = Math.min(maxWithdrawalPercentage, 95); // Cap at 95%
       const maxWithdrawAmount = (cdp.collateralAmount * BigInt(maxWithdrawPercentageValue)) / BigInt(100);
-      const maxTransactionAmount = maxTransactionValue;
       
       let safeWithdrawAmount: bigint = withdrawAmount;
       if (safeWithdrawAmount > maxWithdrawAmount) {
         safeWithdrawAmount = maxWithdrawAmount;
       }
-      if (safeWithdrawAmount > maxTransactionAmount) {
-        safeWithdrawAmount = maxTransactionAmount;
+      if (safeWithdrawAmount > maxTransactionValue) {
+        safeWithdrawAmount = maxTransactionValue;
       }
 
-      // // Check Indigo Protocol minimum transaction amount (10 ADA)
-      // if (safeWithdrawAmount < StrategyEngineService.MINIMUM_TRANSACTION_ADA) {
-      //   return {
-      //     type: 'NO_ACTION',
-      //     cdpId: cdp.cdpId,
-      //     targetCR: strategy.targetCR,
-      //     currentCR,
-      //     reason: `Withdrawal amount ${Number(safeWithdrawAmount) / 1_000_000} ADA is below Indigo Protocol minimum of 10 ADA`,
-      //   };
-      // }
+      const minCRCheck = this.getMinimumCR(cdp.assetType);
+      const potentialNewCollateral = cdp.collateralAmount - safeWithdrawAmount;
+      const potentialNewCR = this.cdpManager.calculateCurrentCR(potentialNewCollateral, cdp.mintedAmount, assetPrice);
 
-      // Ensure withdrawal doesn't drop below minimum absolute CR
-      const remainingCollateral = cdp.collateralAmount - safeWithdrawAmount;
-      const newCR = this.cdpManager.calculateCurrentCR(remainingCollateral, cdp.mintedAmount, assetPrice);
-      
-      if (newCR < minAbsoluteCR) {
+      if (potentialNewCR < minCRCheck) {
         return {
           type: 'NO_ACTION',
           cdpId: cdp.cdpId,
-          targetCR: strategy.targetCR,
+          targetCR: assetStrategy.targetCR,
           currentCR,
-          reason: `Withdrawal would drop CR below minimum absolute CR (${newCR}% < ${minAbsoluteCR}%)`,
-        };
-      }
-
-      // Check Indigo Protocol minimum collateral ratio for this asset
-      const assetMinimumCR = this.getMinimumCR(cdp.assetType);
-      if (newCR < assetMinimumCR) {
-        return {
-          type: 'NO_ACTION',
-          cdpId: cdp.cdpId,
-          targetCR: strategy.targetCR,
-          currentCR,
-          reason: `Withdrawal would drop CR below Indigo Protocol minimum for ${cdp.assetType} (${newCR}% < ${assetMinimumCR}%)`,
+          reason: `Withdrawal would result in CR ${potentialNewCR.toFixed(1)}% below protocol minimum ${minCRCheck}%`,
         };
       }
 
@@ -231,17 +217,17 @@ export class StrategyEngineService extends BaseService {
         type: 'WITHDRAW_COLLATERAL',
         cdpId: cdp.cdpId,
         adjustmentAmount: safeWithdrawAmount,
-        targetCR: strategy.targetCR,
+        targetCR: assetStrategy.targetCR,
         currentCR,
-        reason: `CR ${currentCR}% exceeds max ${strategy.maxCR}%. Withdrawing ${Number(safeWithdrawAmount) / 1_000_000} ADA (limited by ${maxWithdrawPercentageValue}% max, ${Number(maxTransactionAmount) / 1_000_000} ADA max tx)`,
+        reason: `CR ${currentCR}% above max ${assetStrategy.maxCR}%. Withdrawing ${Number(safeWithdrawAmount) / 1_000_000} ADA to reach ${potentialNewCR.toFixed(1)}%`,
       };
 
     } catch (error) {
-      logger.error('Failed to create withdraw action:', { cdpId: cdp.cdpId, error });
+      logger.error('❌ Failed to create withdrawal action:', { cdpId: cdp.cdpId, error });
       return {
         type: 'NO_ACTION',
         cdpId: cdp.cdpId,
-        targetCR: strategy.targetCR,
+        targetCR: assetStrategy.targetCR,
         currentCR,
         reason: `Error calculating withdrawal: ${error}`,
       };
@@ -253,29 +239,19 @@ export class StrategyEngineService extends BaseService {
    */
   private async createDepositAction(
     cdp: ICDP,
-    strategy: IUserStrategy,
+    assetStrategy: IAssetStrategy,
     assetPrice: bigint,
-    currentCR: number
+    currentCR: number,
+    strategyWalletAddress?: string
   ): Promise<IStrategyAction> {
     try {
-      const emergencyStopCR = 115;
       const maxTransactionValue = BigInt(10000_000_000); // 10K ADA
-
-      if (currentCR <= emergencyStopCR) {
-        return {
-          type: 'NO_ACTION',
-          cdpId: cdp.cdpId,
-          targetCR: strategy.targetCR,
-          currentCR,
-          reason: `Emergency stop triggered: CR ${currentCR}% at/below emergency threshold ${emergencyStopCR}%`,
-        };
-      }
 
       const calculation = this.cdpManager.calculateCollateralAdjustment(
         cdp.collateralAmount,
         cdp.mintedAmount,
         assetPrice,
-        strategy.targetCR
+        assetStrategy.targetCR
       );
 
       const depositAmount = calculation.adjustmentAmount > 0 ? calculation.adjustmentAmount : BigInt(0);
@@ -284,7 +260,7 @@ export class StrategyEngineService extends BaseService {
         return {
           type: 'NO_ACTION',
           cdpId: cdp.cdpId,
-          targetCR: strategy.targetCR,
+          targetCR: assetStrategy.targetCR,
           currentCR,
           reason: 'Calculated deposit amount is not positive',
         };
@@ -294,7 +270,9 @@ export class StrategyEngineService extends BaseService {
       const safeDepositAmount: bigint = depositAmount > maxTransactionAmount ? maxTransactionAmount : depositAmount;
 
       try {
-        const walletBalance = await this.walletManager.getWalletBalance(strategy.walletAddress);
+        const balanceCheckAddress = strategyWalletAddress || cdp.walletAddress;
+        
+        const walletBalance = await this.walletManager.getWalletBalance(balanceCheckAddress);
         
         const reserveForFees = BigInt(2_000_000);
         const availableForDeposit = walletBalance.lovelace > reserveForFees ? walletBalance.lovelace - reserveForFees : BigInt(0);
@@ -303,9 +281,9 @@ export class StrategyEngineService extends BaseService {
           return {
             type: 'NO_ACTION',
             cdpId: cdp.cdpId,
-            targetCR: strategy.targetCR,
+            targetCR: assetStrategy.targetCR,
             currentCR,
-            reason: `Insufficient ADA balance: need ${Number(safeDepositAmount) / 1_000_000} ADA, available ${Number(availableForDeposit) / 1_000_000} ADA (${Number(walletBalance) / 1_000_000} ADA total, 2 ADA reserved for fees)`,
+            reason: `Insufficient ADA balance: need ${Number(safeDepositAmount) / 1_000_000} ADA, available ${Number(availableForDeposit) / 1_000_000} ADA (${Number(walletBalance.lovelace) / 1_000_000} ADA total, 2 ADA reserved for fees)`,
           };
         }
 
@@ -318,33 +296,34 @@ export class StrategyEngineService extends BaseService {
           type: 'DEPOSIT_COLLATERAL',
           cdpId: cdp.cdpId,
           adjustmentAmount: actualDepositAmount,
-          targetCR: strategy.targetCR,
+          targetCR: assetStrategy.targetCR,
           currentCR,
-          reason: `CR ${currentCR}% below min ${strategy.minCR}%. Depositing ${Number(actualDepositAmount) / 1_000_000} ADA (available balance: ${Number(availableForDeposit) / 1_000_000} ADA) to reach ${newCR.toFixed(1)}%`,
+          reason: `CR ${currentCR}% below min ${assetStrategy.minCR}%. Depositing ${Number(actualDepositAmount) / 1_000_000} ADA (available balance: ${Number(availableForDeposit) / 1_000_000} ADA) to reach ${newCR.toFixed(1)}%`,
         };
 
       } catch (balanceError) {
-        logger.error('Failed to check wallet balance for deposit:', { 
+        logger.error('❌ Failed to check wallet balance for deposit:', { 
           cdpId: cdp.cdpId, 
-          walletAddress: maskAddress(cdp.walletAddress),
+          cdpWalletAddress: maskAddress(cdp.walletAddress),
+          strategyWalletAddress: strategyWalletAddress ? maskAddress(strategyWalletAddress) : 'not provided',
           error: balanceError 
         });
         
         return {
           type: 'NO_ACTION',
           cdpId: cdp.cdpId,
-          targetCR: strategy.targetCR,
+          targetCR: assetStrategy.targetCR,
           currentCR,
           reason: `Failed to check wallet balance: ${balanceError}`,
         };
       }
 
     } catch (error) {
-      logger.error('Failed to create deposit action:', { cdpId: cdp.cdpId, error });
+      logger.error('❌ Failed to create deposit action:', { cdpId: cdp.cdpId, error });
       return {
         type: 'NO_ACTION',
         cdpId: cdp.cdpId,
-        targetCR: strategy.targetCR,
+        targetCR: assetStrategy.targetCR,
         currentCR,
         reason: `Error calculating deposit: ${error}`,
       };
@@ -355,7 +334,7 @@ export class StrategyEngineService extends BaseService {
    * Get minimum collateral ratio for an asset (Indigo Protocol constraints)
    */
   private getMinimumCR(asset: string): number {
-    return StrategyEngineService.MINIMUM_COLLATERAL_RATIOS[asset] || 130;
+    return StrategyEngineService.MINIMUM_COLLATERAL_RATIOS[asset];
   }
 
   /**
@@ -369,27 +348,40 @@ export class StrategyEngineService extends BaseService {
         errors.push('Wallet address is required');
       }
 
-      if (strategy.targetCR >= strategy.maxCR) {
-        errors.push('Target CR must be less than maximum CR');
+      if (!strategy.assetStrategies || Object.keys(strategy.assetStrategies).length === 0) {
+        errors.push('At least one asset strategy must be configured');
       }
 
-      if (strategy.minCR >= strategy.targetCR) {
-        errors.push('Minimum CR must be less than target CR');
-      }
+      for (const [asset, assetStrategy] of Object.entries(strategy.assetStrategies)) {
+        if (assetStrategy.targetCR >= assetStrategy.maxCR) {
+          errors.push(`${asset}: Target CR must be less than maximum CR`);
+        }
 
-      if (strategy.minCR < 120) {
-        errors.push('Minimum CR should be at least 120% for safety margin');
-      }
+        if (assetStrategy.minCR >= assetStrategy.targetCR) {
+          errors.push(`${asset}: Minimum CR must be less than target CR`);
+        }
 
-      if (strategy.maxCR > 500) {
-        errors.push('Maximum CR seems unusually high (>500%)');
+        if (assetStrategy.minCR < 120) {
+          errors.push(`${asset}: Minimum CR should be at least 120% for safety margin`);
+        }
+
+        if (assetStrategy.maxCR > 500) {
+          errors.push(`${asset}: Maximum CR seems unusually high (>500%)`);
+        }
+
+        const protocolMinCR = this.getMinimumCR(asset);
+        if (assetStrategy.minCR < protocolMinCR) {
+          errors.push(`${asset}: Minimum CR (${assetStrategy.minCR}%) is below protocol minimum (${protocolMinCR}%)`);
+        }
       }
 
       if (errors.length === 0) {
         const recommendations: string[] = [];
         
-        if (strategy.minCR < 150) {
-          recommendations.push('Consider setting minimum CR to 150%+ for better safety margin');
+        for (const [asset, assetStrategy] of Object.entries(strategy.assetStrategies)) {
+          if (assetStrategy.minCR < 150) {
+            recommendations.push(`${asset}: Consider setting minimum CR to 150%+ for better safety margin`);
+          }
         }
         
         if (recommendations.length > 0) {
@@ -401,7 +393,7 @@ export class StrategyEngineService extends BaseService {
       }
 
     } catch (error) {
-      logger.error('Strategy validation failed:', { strategy, error });
+      logger.error('❌ Strategy validation failed:', { strategy, error });
       errors.push(`Validation error: ${error}`);
     }
 
@@ -464,7 +456,7 @@ export class StrategyEngineService extends BaseService {
         await delay(1000);
 
       } catch (error) {
-        logger.error('Failed to execute strategy action:', {
+        logger.error('❌ Failed to execute strategy action:', {
           type: action.type,
           cdpId: action.cdpId,
           walletAddress: maskAddress(walletAddress),

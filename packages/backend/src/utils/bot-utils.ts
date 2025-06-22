@@ -2,9 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import { IUserStrategy } from '@cdp-bot/shared';
 import logger from './logger';
-import { maskAddress, getAssetPrice } from './common.js';
-import { CDPManagerService } from '../services/cdp-manager.service';
-import { WalletManagerService } from '../services/wallet-manager.service';
+import { maskAddress, getAssetPrice } from './common';
+import { CDPManagerService, WalletManagerService } from '../services';
 
 /**
  * Reload environment variables from .env file
@@ -81,15 +80,26 @@ export async function logStrategyAndCDPStatus(
           totalCollateralADA += cdp.collateralAmount;
           totalDebtUSD += debtValueUSD;
           
+          const assetStrategy = strategy.assetStrategies[cdp.assetType];
+          
           let actionNeeded = 'MONITOR';
           let actionReason = 'CR within range';
+          let targetCR = 'N/A';
+          let range = 'N/A';
           
-          if (currentCR > strategy.maxCR) {
-            actionNeeded = 'WITHDRAW';
-            actionReason = `CR ${currentCR}% > max ${strategy.maxCR}%`;
-          } else if (currentCR < strategy.minCR) {
-            actionNeeded = 'DEPOSIT';
-            actionReason = `CR ${currentCR}% < min ${strategy.minCR}%`;
+          if (assetStrategy && assetStrategy.enabled) {
+            targetCR = `${assetStrategy.targetCR}%`;
+            range = `${assetStrategy.minCR}%-${assetStrategy.maxCR}%`;
+            
+            if (currentCR > assetStrategy.maxCR) {
+              actionNeeded = 'WITHDRAW';
+              actionReason = `CR ${currentCR.toFixed(1)}% > max ${assetStrategy.maxCR}%`;
+            } else if (currentCR < assetStrategy.minCR) {
+              actionNeeded = 'DEPOSIT';
+              actionReason = `CR ${currentCR.toFixed(1)}% < min ${assetStrategy.minCR}%`;
+            }
+          } else {
+            actionReason = `No strategy configured for ${cdp.assetType}`;
           }
           
           cdpStatuses.push({
@@ -98,20 +108,29 @@ export async function logStrategyAndCDPStatus(
             collateralADA: collateralADA.toFixed(6),
             debt: `${debtAmount.toFixed(6)} ${cdp.assetType}`,
             debtValueUSD: debtValueUSD.toFixed(2),
-            currentCR: `${currentCR}%`,
-            targetCR: `${strategy.targetCR}%`,
-            range: `${strategy.minCR}%-${strategy.maxCR}%`,
+            currentCR: `${currentCR.toFixed(1)}%`,
+            targetCR,
+            range,
             action: actionNeeded,
             reason: actionReason
           });
         }
 
+        const enabledAssets = Object.entries(strategy.assetStrategies)
+          .filter(([_, assetStrategy]) => assetStrategy.enabled)
+          .map(([asset, _]) => asset);
+        
+        const strategyOverview = enabledAssets.length > 0 
+          ? `Enabled assets: ${enabledAssets.join(', ')}`
+          : 'No enabled asset strategies';
+
         logger.info(`👤 STRATEGY: ${maskAddress(strategy.walletAddress)}`, {
           status: strategy.enabled ? 'ACTIVE' : 'DISABLED',
           balance: balanceADA,
           strategy: {
-            targetCR: `${strategy.targetCR}%`,
-            range: `${strategy.minCR}%-${strategy.maxCR}%`
+            overview: strategyOverview,
+            enabledAssets: enabledAssets.length,
+            totalAssetStrategies: Object.keys(strategy.assetStrategies).length
           },
           portfolio: {
             totalCDPs: userCDPs.length,

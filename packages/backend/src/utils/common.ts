@@ -69,4 +69,31 @@ export function createSuccessResponse<T>(data: T, message: string = 'Success') {
     message,
     data
   };
+}
+
+/**
+ * Format price from lovelace to ADA with proper comma formatting
+ * @param lovelacePrice - Price in lovelace (bigint)
+ * @returns Formatted price string with ADA symbol
+ */
+export function formatPriceInADA(lovelacePrice: bigint): string {
+  const adaPrice = Number(lovelacePrice) / 1_000_000;
+  return `₳${adaPrice.toLocaleString('en-US', { 
+    minimumFractionDigits: 2, 
+    maximumFractionDigits: 6 
+  })}`;
+}
+
+/**
+ * Format prices object for logging
+ * @param prices - IAssetPrices object with bigint values
+ * @returns Object with formatted price strings
+ */
+export function formatPricesForLogging(prices: any): Record<string, string> {
+  return {
+    iUSD: formatPriceInADA(BigInt(prices.iUSD)),
+    iBTC: formatPriceInADA(BigInt(prices.iBTC)),
+    iETH: formatPriceInADA(BigInt(prices.iETH)),
+    iSOL: formatPriceInADA(BigInt(prices.iSOL)),
+  };
 } 

@@ -1,18 +1,17 @@
 import * as IndigoSDK from '@indigo-labs/indigo-sdk';
-import {OutRef} from '@lucid-evolution/lucid';
-import {IsNull, Repository} from 'typeorm';
-import { getRepository, initializeTypeORM} from '../config/typeorm.js';
-import {CollateralizedDebtPosition, Price} from '../entities/index.js';
-import {IAssetPrices, IPriceData} from '@cdp-bot/shared';
-import lucidProvider from '../config/lucid.js';
-import indigoParamsConfig from '../config/indigo-params.js';
-import {WalletManagerService} from './wallet-manager.service.js';
-import {ICDP} from '@cdp-bot/shared';
-import logger from '../utils/logger.js';
-import { maskAddress, delay } from '../utils/common.js';
-import { BaseService } from './base-service.js';
-import { serviceRegistry } from './service-registry.js';
-import {getAddressDetails} from '@lucid-evolution/utils';
+import { OutRef } from '@lucid-evolution/lucid';
+import { IsNull, Repository } from 'typeorm';
+import { getRepository, initializeTypeORM } from '../config/typeorm';
+import { CollateralizedDebtPosition, Price } from '../entities';
+import { IAssetPrices, ICDP, IPriceData } from '@cdp-bot/shared';
+import lucidProvider from '../config/lucid';
+import indigoParamsConfig from '../config/indigo-params';
+import { WalletManagerService } from './wallet-manager.service';
+import logger from '../utils/logger';
+import { delay, maskAddress } from '../utils/common';
+import { BaseService } from './base-service';
+import { serviceRegistry } from './service-registry';
+import { getAddressDetails } from '@lucid-evolution/utils';
 
 export class CDPManagerService extends BaseService {
   private _walletManager?: WalletManagerService;
@@ -92,7 +91,7 @@ export class CDPManagerService extends BaseService {
       };
 
     } catch (error) {
-      logger.error('Failed to get latest price for asset:', { asset, error });
+      logger.error('❌ Failed to get latest price for asset:', { asset, error });
       return null;
     }
   }
@@ -129,7 +128,7 @@ export class CDPManagerService extends BaseService {
       }
 
       if (foundPrices === 0) {
-        logger.error('No price data found for any assets');
+        logger.error('❌ No price data found for any assets');
         return null;
       }
 
@@ -142,7 +141,7 @@ export class CDPManagerService extends BaseService {
       };
 
     } catch (error) {
-      logger.error('Failed to get current prices:', error);
+      logger.error('❌ Failed to get current prices:', error);
       return null;
     }
   }
@@ -155,20 +154,20 @@ export class CDPManagerService extends BaseService {
       const paymentKeyHash = this.extractPaymentKeyHash(walletAddress);
 
       const whereConditions = [
-        {owner: walletAddress, consumed: IsNull()}
+        { owner: walletAddress, consumed: IsNull() }
       ];
 
       if (paymentKeyHash) {
-        whereConditions.push({owner: paymentKeyHash, consumed: IsNull()});
+        whereConditions.push({ owner: paymentKeyHash, consumed: IsNull() });
       }
 
       return await this.cdpRepository.find({
         where: whereConditions,
-        order: {createdAt: 'DESC'},
+        order: { createdAt: 'DESC' },
       });
 
     } catch (error) {
-      logger.error('Error fetching active CDPs by owner:', { 
+      logger.error('❌ Error fetching active CDPs by owner:', { 
         walletAddress: maskAddress(walletAddress), 
         error 
       });
@@ -193,7 +192,7 @@ export class CDPManagerService extends BaseService {
       return null;
 
     } catch (error) {
-      logger.error('Failed to extract payment key hash from address:', { 
+      logger.error('❌ Failed to extract payment key hash from address:', { 
         address: maskAddress(bech32Address), 
         error 
       });
@@ -248,7 +247,7 @@ export class CDPManagerService extends BaseService {
       return Math.round(cr * 100) / 100;
 
     } catch (error) {
-      logger.error('Failed to calculate current CR:', { error });
+      logger.error('❌ Failed to calculate current CR:', { error });
       return 0;
     }
   }
@@ -374,7 +373,7 @@ export class CDPManagerService extends BaseService {
       };
 
     } catch (error) {
-      logger.error('Failed to calculate collateral adjustment:', { error });
+      logger.error('❌ Failed to calculate collateral adjustment:', { error });
       return { adjustmentAmount: BigInt(0), newCR: 0 };
     }
   }

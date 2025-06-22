@@ -1,8 +1,8 @@
 import 'reflect-metadata';
 import { DataSource, DataSourceOptions, Repository, ObjectLiteral } from 'typeorm';
-import { Price, CollateralizedDebtPosition } from '../entities/index.js';
-import CONFIG from './index.js';
-import logger from '../utils/logger.js';
+import { Price, CollateralizedDebtPosition } from '../entities';
+import CONFIG from './index';
+import logger from '../utils/logger';
 
 export const AppDataSource = new DataSource({
   type: 'mysql',

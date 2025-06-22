@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { BotRunner } from '../bot/runner';
 import logger from '../utils/logger';
-import { createErrorResponse, createSuccessResponse } from '../utils/common.js';
+import { createErrorResponse, createSuccessResponse } from '../utils/common';
 
 export function createBotRoutes(botRunner: BotRunner): Router {
   const router = Router();

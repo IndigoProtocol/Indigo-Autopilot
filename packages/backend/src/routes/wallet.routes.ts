@@ -1,14 +1,9 @@
 import { Router, Request, Response } from 'express';
-import { WalletManagerService } from '../services/wallet-manager.service';
-
-import { CDPManagerService } from '../services/cdp-manager.service';
-import { StrategyEngineService } from '../services/strategy-engine.service';
-import { BalanceService } from '../services/balance.service';
+import { WalletManagerService, CDPManagerService, BalanceService, getService } from '../services';
 import { IUserStrategy } from '@cdp-bot/shared';
 import logger from '../utils/logger';
-import { maskAddress, getAssetPrice, createErrorResponse, createSuccessResponse } from '../utils/common.js';
-import { loadStrategyFromEnv, updateStrategyInEnv, removeStrategyFromEnv } from '../utils/strategy-env.js';
-import { getService } from '../services/index.js';
+import { maskAddress, getAssetPrice, createErrorResponse, createSuccessResponse } from '../utils/common';
+import { loadStrategyFromEnv, updateStrategyInEnv } from '../utils/strategy-env';
 
 const router = Router();
 
@@ -49,9 +44,7 @@ router.post('/add', async (req: Request, res: Response) => {
     const strategyConfig: IUserStrategy = {
       walletAddress,
       enabled: strategy?.enabled ?? true,
-      targetCR: strategy?.targetCR ?? 160,
-      minCR: strategy?.minCR ?? 140,
-      maxCR: strategy?.maxCR ?? 180,
+      assetStrategies: strategy?.assetStrategies || {},
     };
 
     await updateStrategyInEnv(walletAddress, strategyConfig);
@@ -60,7 +53,7 @@ router.post('/add', async (req: Request, res: Response) => {
       walletAddress: maskAddress(walletAddress),
       strategy: {
         enabled: strategyConfig.enabled,
-        targetCR: strategyConfig.targetCR,
+        assetStrategies: Object.keys(strategyConfig.assetStrategies),
       }
     });
 
@@ -68,9 +61,7 @@ router.post('/add', async (req: Request, res: Response) => {
       walletAddress: maskAddress(walletAddress),
       strategy: {
         enabled: strategyConfig.enabled,
-        targetCR: strategyConfig.targetCR,
-        minCR: strategyConfig.minCR,
-        maxCR: strategyConfig.maxCR,
+        assetStrategies: strategyConfig.assetStrategies,
       }
     }, 'Wallet configured successfully');
     
@@ -106,9 +97,7 @@ router.put('/:address/strategy', async (req: Request, res: Response) => {
     const updatedStrategy: IUserStrategy = {
       walletAddress: address,
       enabled: strategy.enabled ?? true,
-      targetCR: strategy.targetCR ?? 160,
-      minCR: strategy.minCR ?? 140,
-      maxCR: strategy.maxCR ?? 180,
+      assetStrategies: strategy.assetStrategies || {},
     };
 
     await updateStrategyInEnv(address, updatedStrategy);
@@ -117,16 +106,14 @@ router.put('/:address/strategy', async (req: Request, res: Response) => {
       walletAddress: maskAddress(address),
       strategy: {
         enabled: updatedStrategy.enabled,
-        targetCR: updatedStrategy.targetCR,
+        assetStrategies: Object.keys(updatedStrategy.assetStrategies),
       }
     });
 
     const response = createSuccessResponse({
       strategy: {
         enabled: updatedStrategy.enabled,
-        targetCR: updatedStrategy.targetCR,
-        minCR: updatedStrategy.minCR,
-        maxCR: updatedStrategy.maxCR,
+        assetStrategies: updatedStrategy.assetStrategies,
       }
     }, 'Strategy updated successfully');
     
@@ -279,9 +266,7 @@ router.get('/:address/strategy', async (req: Request, res: Response) => {
 
     const safeStrategy = {
       enabled: strategy.enabled,
-      targetCR: strategy.targetCR,
-      minCR: strategy.minCR,
-      maxCR: strategy.maxCR,
+      assetStrategies: strategy.assetStrategies,
     };
 
     const response = createSuccessResponse({

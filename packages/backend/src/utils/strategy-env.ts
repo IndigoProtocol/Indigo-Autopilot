@@ -103,7 +103,8 @@ export async function updateStrategyInEnv(walletAddress: string, strategy: IUser
       walletAddress: maskAddress(walletAddress),
       strategy: {
         enabled: strategy.enabled,
-        targetCR: strategy.targetCR
+        assetCount: Object.keys(strategy.assetStrategies || {}).length,
+        assets: Object.keys(strategy.assetStrategies || {})
       }
     });
 

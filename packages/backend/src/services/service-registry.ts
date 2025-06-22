@@ -1,8 +1,8 @@
 /**
  * Service Registry - Manages singleton instances and initialization order
  */
-import logger from '../utils/logger.js';
-import { BaseService } from './base-service.js';
+import logger from '../utils/logger';
+import { BaseService } from './base-service';
 
 type ServiceConstructor = new () => BaseService;
 

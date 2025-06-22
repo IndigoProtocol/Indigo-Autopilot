@@ -1,19 +1,14 @@
 #!/usr/bin/env tsx
-import { WalletManagerService } from '../services/wallet-manager.service';
-import { IUserStrategy } from '@cdp-bot/shared';
+import { WalletManagerService } from '../services';
 import logger from '../utils/logger';
-import { maskAddress } from '../utils/common.js';
-import { addWalletToEnv, removeStrategyFromEnv } from '../utils/strategy-env.js';
+import { maskAddress } from '../utils/common';
+import { removeStrategyFromEnv } from '../utils/strategy-env';
+import { storeSeedphrase } from '../utils/wallet-utils';
 
 /**
  * Interactive script to help users set up their wallet and strategy
  * TODO: This script needs to be updated to work with the current system
  */
-
-interface WalletSetup {
-  seedPhrase: string;
-  strategy: IUserStrategy;
-}
 
 class WalletSetup {
   private walletManager: WalletManagerService;
@@ -25,13 +20,13 @@ class WalletSetup {
   /**
    * Add a new wallet and strategy configuration
    */
-  async addWallet(seedPhrase: string, strategyConfig: Partial<IUserStrategy>): Promise<string> {
+  async addWallet(seedPhrase: string): Promise<string> {
     try {
       const { Lucid, Blockfrost } = await import('@lucid-evolution/lucid');
       
       const provider = new Blockfrost(
         'https://cardano-mainnet.blockfrost.io/api/v0',
-        process.env.BLOCKFROST_PROJECT_ID || 'mainnetDefaultKey'
+        process.env.BLOCKFROST_PROJECT_ID
       );
       
       const tempLucid = await Lucid(provider, 'Mainnet');
@@ -39,24 +34,10 @@ class WalletSetup {
       const wallet = tempLucid.wallet();
       const walletAddress = await wallet.address();
       
-      await this.walletManager.storeSeedphrase(walletAddress, seedPhrase);
-
-      const strategy: IUserStrategy = {
-        walletAddress,
-        enabled: strategyConfig.enabled ?? true,
-        targetCR: strategyConfig.targetCR ?? 160,
-        minCR: strategyConfig.minCR ?? 140,
-        maxCR: strategyConfig.maxCR ?? 180,
-      };
-
-      await addWalletToEnv(walletAddress, seedPhrase, strategy);
+      await storeSeedphrase(walletAddress, seedPhrase);
       
-      logger.info('✅ Wallet and strategy configured successfully!', {
-        walletAddress: maskAddress(walletAddress),
-        strategy: {
-          enabled: strategy.enabled,
-          targetCR: strategy.targetCR,
-        }
+      logger.info('✅ Wallet configured successfully! Use the strategy CLI to create strategies.', {
+        walletAddress: maskAddress(walletAddress)
       });
 
       return walletAddress;
@@ -111,28 +92,15 @@ async function main() {
     switch (command) {
       case 'add':
         if (args.length < 2) {
-          console.log('Usage: npm run setup-wallet add "<seed phrase>" [options]');
-          console.log('Example: npm run setup-wallet add "word1 word2 word3..." --target-cr=160 --assets=iUSD,iBTC');
+          console.log('Usage: npm run setup-wallet add "<seed phrase>"');
+          console.log('Example: npm run setup-wallet add "word1 word2 word3..."');
           process.exit(1);
         }
 
         const seedPhrase = args[1];
-        const strategyOptions: Partial<IUserStrategy> = {};
-
-        // Parse options
-        for (let i = 2; i < args.length; i++) {
-          const arg = args[i];
-          if (arg.startsWith('--target-cr=')) {
-            strategyOptions.targetCR = parseInt(arg.split('=')[1]);
-          } else if (arg.startsWith('--min-cr=')) {
-            strategyOptions.minCR = parseInt(arg.split('=')[1]);
-          } else if (arg.startsWith('--max-cr=')) {
-            strategyOptions.maxCR = parseInt(arg.split('=')[1]);
-          }
-        }
-
-        const walletAddress = await setup.addWallet(seedPhrase, strategyOptions);
+        const walletAddress = await setup.addWallet(seedPhrase);
         console.log(`✅ Wallet configured: ${walletAddress}`);
+        console.log('💡 Next: Use "npm run strategy-cli update" to configure strategies for this wallet.');
         break;
 
       case 'list':
@@ -156,14 +124,12 @@ async function main() {
       default:
         console.log('CDP Bot Wallet Setup');
         console.log('Commands:');
-        console.log('  add "<seed phrase>" [options] - Add a new wallet');
-        console.log('  list                          - List configured wallets');
-        console.log('  remove <wallet_address>       - Remove a wallet');
+        console.log('  add "<seed phrase>"     - Add a new wallet (seed phrase only)');
+        console.log('  list                    - List configured wallets');
+        console.log('  remove <wallet_address> - Remove a wallet');
         console.log('');
-        console.log('Options for add command:');
-        console.log('  --target-cr=160    - Target collateral ratio (default: 160%)');
-        console.log('  --min-cr=140       - Minimum CR (default: 140%)');
-        console.log('  --max-cr=180       - Maximum CR (default: 180%)');
+        console.log('Note: After adding a wallet, use the strategy CLI to configure strategies:');
+        console.log('  npm run strategy-cli update --wallet=<address> --assets=<assets> --target-cr=<cr>');
         break;
     }
 

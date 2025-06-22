@@ -1,4 +1,4 @@
-import {Blockfrost, Lucid, Network} from '@lucid-evolution/lucid';
+import { Blockfrost, Lucid, Network } from '@lucid-evolution/lucid';
 import CONFIG from './index';
 import logger from '../utils/logger';
 

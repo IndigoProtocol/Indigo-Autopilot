@@ -1,9 +1,21 @@
 import lucidProvider from '../config/lucid';
-import {IWalletData} from '@cdp-bot/shared';
+import { IWalletData } from '@cdp-bot/shared';
 import logger from '../utils/logger';
-import * as crypto from 'crypto';
-import { maskAddress } from '../utils/common.js';
-import { BaseService } from './base-service.js';
+import { maskAddress } from '../utils/common';
+import { BaseService } from './base-service';
+import { CML, fromHex, coreToUtxo } from '@lucid-evolution/lucid';
+import { 
+  normalizeAddress, 
+  categorizeAddress, 
+  AddressType, 
+  tryDecodeHex
+} from '../utils/address-utils.js';
+import {
+  storeSeedphrase as storeWalletSeedphrase,
+  getSeedphrase as getWalletSeedphrase,
+  removeSeedphrase as removeWalletSeedphrase,
+  loadWalletFromEnv
+} from '../utils/wallet-utils.js';
 
 export class WalletManagerService extends BaseService {
   private walletCache: Map<string, IWalletData> = new Map();
@@ -23,27 +35,12 @@ export class WalletManagerService extends BaseService {
    */
   async storeSeedphrase(walletAddress: string, seedphrase: string): Promise<void> {
     return this.executeAsync('storeSeedphrase', async () => {
-      const words = seedphrase.trim().split(' ');
-      if (words.length !== 24) {
-        throw new Error('Invalid seed phrase: must be 24 words');
+      await storeWalletSeedphrase(walletAddress, seedphrase);
+      
+      const walletData = await loadWalletFromEnv(walletAddress);
+      if (walletData) {
+        this.walletCache.set(walletAddress, walletData);
       }
-
-      const encryptedSeedphrase = this.encryptSeedphrase(seedphrase);
-      
-      const envKey = `WALLET_SEEDPHRASE_${walletAddress}`;
-      process.env[envKey] = encryptedSeedphrase;
-      
-      const walletData: IWalletData = {
-        address: walletAddress,
-        seedphrase: encryptedSeedphrase
-      };
-      
-      this.walletCache.set(walletAddress, walletData);
-      
-      logger.info('Seed phrase stored successfully', { 
-        walletAddress: maskAddress(walletAddress),
-        envKey 
-      });
     }, { walletAddress });
   }
 
@@ -55,20 +52,20 @@ export class WalletManagerService extends BaseService {
       let walletData = this.walletCache.get(walletAddress);
 
       if (!walletData) {
-        walletData = await this.loadWalletFromEnv(walletAddress);
+        walletData = await loadWalletFromEnv(walletAddress);
         if (walletData) {
           this.walletCache.set(walletAddress, walletData);
         }
       }
 
       if (!walletData) {
-        throw new Error('Wallet not found in cache or environment');
+        return null;
       }
 
-      return this.decryptSeedphrase(walletData.seedphrase);
+      return await getWalletSeedphrase(walletAddress);
 
     } catch (error) {
-      logger.error('Failed to retrieve seed phrase:', { 
+      logger.error('❌ Failed to retrieve seed phrase:', { 
         walletAddress: maskAddress(walletAddress), 
         error 
       });
@@ -76,71 +73,113 @@ export class WalletManagerService extends BaseService {
     }
   }
 
-  async getWalletBalance(walletAddress: string): Promise<{ lovelace: bigint; ada: number }> {
+  async getWalletBalance(walletAddress: string): Promise<{ lovelace: bigint; ada: number; tokens?: Record<string, any> }> {
     try {
+      const addressType = categorizeAddress(walletAddress);
+      let processedAddress = walletAddress;
+      
+      if (addressType !== AddressType.BECH32_BASE && addressType !== AddressType.BECH32_ENTERPRISE) {
+        processedAddress = normalizeAddress(walletAddress);
+      }
+      
       const lucid = lucidProvider.lucid;
       if (!lucid) {
-        throw new Error('Lucid not initialized');
+        throw new Error('WalletManagerService: Lucid not initialized');
       }
       
-      const utxos = await lucid.utxosAt(walletAddress);
+      const utxos = await lucid.utxosAt(processedAddress);
       
       if (!utxos || utxos.length === 0) {
-        logger.info('No UTXOs found for wallet', { 
-          walletAddress: maskAddress(walletAddress) 
-        });
-        return { lovelace: BigInt(0), ada: 0 };
+        return { lovelace: BigInt(0), ada: 0, tokens: {} };
       }
 
-      const totalLovelace = utxos.reduce((sum: bigint, utxo: any) => {
-        return sum + BigInt(utxo.assets.lovelace);
-      }, BigInt(0));
+      const validatedUtxos = this.validateAndParseUtxos(utxos);
+      let totalLovelace = BigInt(0);
+      const tokenBalances: Record<string, bigint> = {};
+      
+      for (const utxo of validatedUtxos) {
+        if (utxo.assets.lovelace) {
+          const lovelaceAmount = typeof utxo.assets.lovelace === 'bigint' 
+            ? utxo.assets.lovelace 
+            : BigInt(String(utxo.assets.lovelace));
+          totalLovelace += lovelaceAmount;
+        }
+
+        for (const [assetId, amount] of Object.entries(utxo.assets)) {
+          if (assetId === 'lovelace') continue;
+          
+          const tokenAmount = typeof amount === 'bigint' ? amount : BigInt(String(amount));
+          tokenBalances[assetId] = (tokenBalances[assetId] || BigInt(0)) + tokenAmount;
+        }
+      }
 
       const adaAmount = Number(totalLovelace) / 1_000_000;
-
-      logger.info('Wallet balance retrieved', {
-        walletAddress: maskAddress(walletAddress),
-        balance: `${adaAmount.toFixed(6)} ADA`
-      });
-
-      return { lovelace: totalLovelace, ada: adaAmount };
-
-    } catch (error) {
-      logger.error('Failed to get wallet balance:', { 
-        walletAddress: maskAddress(walletAddress), 
-        error 
-      });
-      throw new Error(`Failed to get wallet balance: ${error}`);
-    }
-  }
-
-  private async loadWalletFromEnv(walletAddress: string): Promise<IWalletData | undefined> {
-    try {
-      const seedPhraseKey = `WALLET_SEEDPHRASE_${walletAddress}`;
-
-      const encryptedSeedphrase = process.env[seedPhraseKey];
-
-      if (!encryptedSeedphrase) {
-        logger.error('❌ No seed phrase found in environment', {
-          walletAddress: maskAddress(walletAddress),
-          envKey: seedPhraseKey.substring(0, 30) + '...',
-          allEnvKeys: Object.keys(process.env).filter(k => k.startsWith('WALLET_')).map(k => k.substring(0, 30) + '...')
-        });
-        return undefined;
+      const formattedTokens: Record<string, any> = {};
+      
+      for (const [assetId, amount] of Object.entries(tokenBalances)) {
+        if (amount > 0n) {
+          const policyId = assetId.slice(0, 56);
+          const assetName = assetId.slice(56);
+          
+          formattedTokens[assetId] = {
+            policyId,
+            assetName,
+            decodedName: tryDecodeHex(assetName),
+            amount: amount.toString()
+          };
+        }
       }
 
-      return {
-        address: walletAddress,
-        seedphrase: encryptedSeedphrase
+      return { 
+        lovelace: totalLovelace, 
+        ada: adaAmount,
+        tokens: formattedTokens
       };
 
     } catch (error) {
-      logger.error('Failed to load wallet from environment:', {
-        walletAddress: maskAddress(walletAddress),
-        error
-      });
-      return undefined;
+      throw new Error(`WalletManagerService.getWalletBalance failed: ${error instanceof Error ? error.message : String(error)}`);
     }
+  }
+
+  /**
+   * Validate and parse UTxOs, handling different formats
+   */
+  private validateAndParseUtxos(utxos: any[]): any[] {
+    if (!utxos || !Array.isArray(utxos) || utxos.length === 0) {
+      return [];
+    }
+
+    const validatedUtxos = utxos.map((utxo, _index) => {
+      if (!utxo) {
+        return null;
+      }
+
+      if (typeof utxo === 'string') {
+        const utxoObject = CML.TransactionUnspentOutput.from_cbor_bytes(fromHex(utxo));
+        return coreToUtxo(utxoObject);
+      }
+
+      if (!utxo.txHash || utxo.outputIndex === undefined || !utxo.assets) {
+        return null;
+      }
+      
+      const formattedAssets: { [key: string]: bigint } = {};
+      
+      for (const [assetId, amount] of Object.entries(utxo.assets || {})) {
+        if (amount === undefined || amount === null) {
+          formattedAssets[assetId] = BigInt(0);
+        } else {
+          formattedAssets[assetId] = typeof amount === 'bigint' ? amount : BigInt(String(amount));
+        }
+      }
+
+      return {
+        ...utxo,
+        assets: formattedAssets
+      };
+    }).filter(Boolean);
+
+    return validatedUtxos;
   }
 
   /**
@@ -180,7 +219,7 @@ export class WalletManagerService extends BaseService {
       return signedTx;
 
     } catch (error) {
-      logger.error('Failed to sign transaction:', {
+      logger.error('❌ Failed to sign transaction:', {
         walletAddress: maskAddress(walletAddress),
         error: error instanceof Error ? error.message : String(error),
         stack: error instanceof Error ? error.stack : undefined
@@ -194,20 +233,16 @@ export class WalletManagerService extends BaseService {
    */
   async removeSeedphrase(walletAddress: string): Promise<boolean> {
     try {
-      const envKey = `WALLET_SEEDPHRASE_${walletAddress}`;
+      const success = await removeWalletSeedphrase(walletAddress);
       
-      delete process.env[envKey];
+      if (success) {
+        this.walletCache.delete(walletAddress);
+      }
       
-      this.walletCache.delete(walletAddress);
-      
-      logger.info('Seed phrase removed successfully', { 
-        walletAddress: maskAddress(walletAddress) 
-      });
-      
-      return true;
+      return success;
 
     } catch (error) {
-      logger.error('Failed to remove seed phrase:', { 
+      logger.error('❌ Failed to remove seed phrase:', { 
         walletAddress: maskAddress(walletAddress), 
         error 
       });
@@ -216,7 +251,7 @@ export class WalletManagerService extends BaseService {
   }
 
   /**
-   * List all managed wallets (without seed phrases)
+   * List all managed wallets
    */
   getManagedWallets(): Omit<IWalletData, 'seedphrase'>[] {
     return Array.from(this.walletCache.values()).map(wallet => ({
@@ -225,78 +260,14 @@ export class WalletManagerService extends BaseService {
   }
 
   /**
-   * Check if a wallet is managed (has seed phrase available)
+   * Check if a wallet is managed
    */
   async isWalletManaged(walletAddress: string): Promise<boolean> {
     try {
       const seedphrase = await this.getSeedphrase(walletAddress);
       return seedphrase !== null && seedphrase !== undefined;
-    } catch (error) {
+    } catch (_error) {
       return false;
     }
-  }
-
-  /**
-   * Encrypt seed phrase using AES-256-CBC
-   */
-  private encryptSeedphrase(seedphrase: string): string {
-    try {
-      const key = this.getEncryptionKey();
-      const iv = crypto.randomBytes(16);
-      const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
-      
-      let encrypted = cipher.update(seedphrase, 'utf8', 'hex');
-      encrypted += cipher.final('hex');
-      
-      const result = iv.toString('hex') + ':' + encrypted;
-      
-      return result;
-
-    } catch (error) {
-      logger.error('Encryption failed:', error);
-      throw new Error('Failed to encrypt seed phrase');
-    }
-  }
-
-  /**
-   * Decrypt seed phrase using AES-256-CBC
-   */
-  private decryptSeedphrase(encryptedSeedphrase: string): string {
-    try {
-      if (!encryptedSeedphrase.includes(':') && encryptedSeedphrase.includes(' ')) {
-        return encryptedSeedphrase;
-      }
-
-      const key = this.getEncryptionKey();
-      const [ivHex, encryptedHex] = encryptedSeedphrase.split(':');
-      
-      if (!ivHex || !encryptedHex) {
-        throw new Error('Invalid encrypted seed phrase format');
-      }
-
-      const iv = Buffer.from(ivHex, 'hex');
-      const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
-      
-      let decrypted = decipher.update(encryptedHex, 'hex', 'utf8');
-      decrypted += decipher.final('utf8');
-      
-      return decrypted;
-
-    } catch (error) {
-      logger.error('Decryption failed:', error);
-      throw new Error('Failed to decrypt seed phrase');
-    }
-  }
-
-  /**
-   * Get encryption key from environment
-   */
-  private getEncryptionKey(): Buffer {
-    const key = process.env.ENCRYPTION_KEY;
-    if (!key) {
-      throw new Error('ENCRYPTION_KEY not found in environment variables');
-    }
-    
-    return crypto.scryptSync(key, 'cdp-management-salt', 32);
   }
 } 

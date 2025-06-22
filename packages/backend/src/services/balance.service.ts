@@ -1,8 +1,8 @@
 import { Blockfrost, Lucid } from '@lucid-evolution/lucid';
 import CONFIG from '../config';
 import logger from '../utils/logger';
-import { maskAddress } from '../utils/common.js';
-import { BaseService } from './base-service.js';
+import { maskAddress } from '../utils/common';
+import { BaseService } from './base-service';
 
 export class BalanceService extends BaseService {
   private lucid!: Awaited<ReturnType<typeof Lucid>>;
