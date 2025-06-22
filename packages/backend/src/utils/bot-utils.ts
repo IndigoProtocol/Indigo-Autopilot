@@ -1,9 +1,9 @@
 import fs from 'fs';
 import path from 'path';
-import { IUserStrategy } from '@cdp-bot/shared';
+import {IUserStrategy} from '@cdp-bot/shared';
 import logger from './logger';
-import { maskAddress, getAssetPrice } from './common';
-import { CDPManagerService, WalletManagerService } from '../services';
+import {getAssetPrice, maskAddress} from './common';
+import {CDPManagerService, WalletManagerService} from '../services';
 
 /**
  * Reload environment variables from .env file
@@ -21,8 +21,7 @@ export function reloadEnvironmentVariables(): void {
         if (trimmedLine && !trimmedLine.startsWith('#')) {
           const [key, ...valueParts] = trimmedLine.split('=');
           if (key && valueParts.length > 0) {
-            const value = valueParts.join('=');
-            process.env[key] = value;
+            process.env[key] = valueParts.join('=');
           }
         }
       }
@@ -93,10 +92,10 @@ export async function logStrategyAndCDPStatus(
             
             if (currentCR > assetStrategy.maxCR) {
               actionNeeded = 'WITHDRAW';
-              actionReason = `CR ${currentCR.toFixed(1)}% > max ${assetStrategy.maxCR}%`;
+              actionReason = `${cdp.assetType} CR ${currentCR.toFixed(1)}% > max ${assetStrategy.maxCR}%`;
             } else if (currentCR < assetStrategy.minCR) {
               actionNeeded = 'DEPOSIT';
-              actionReason = `CR ${currentCR.toFixed(1)}% < min ${assetStrategy.minCR}%`;
+              actionReason = `${cdp.assetType} CR ${currentCR.toFixed(1)}% < min ${assetStrategy.minCR}%`;
             }
           } else {
             actionReason = `No strategy configured for ${cdp.assetType}`;

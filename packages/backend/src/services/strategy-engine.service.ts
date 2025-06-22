@@ -129,7 +129,7 @@ export class StrategyEngineService extends BaseService {
           cdpId: cdp.cdpId,
           targetCR: assetStrategy.targetCR,
           currentCR,
-          reason: `CR ${currentCR}% is within acceptable range (${assetStrategy.minCR}% - ${assetStrategy.maxCR}%)`,
+          reason: `${cdp.assetType} CR ${currentCR}% is within acceptable range (${assetStrategy.minCR}% - ${assetStrategy.maxCR}%)`,
         };
       }
 
@@ -165,7 +165,7 @@ export class StrategyEngineService extends BaseService {
           cdpId: cdp.cdpId,
           targetCR: assetStrategy.targetCR,
           currentCR,
-          reason: `Emergency stop triggered: CR ${currentCR}% at/below emergency threshold ${emergencyStopCR}%`,
+          reason: `${cdp.assetType} emergency stop triggered: CR ${currentCR}% at/below emergency threshold ${emergencyStopCR}%`,
         };
       }
 
@@ -209,7 +209,7 @@ export class StrategyEngineService extends BaseService {
           cdpId: cdp.cdpId,
           targetCR: assetStrategy.targetCR,
           currentCR,
-          reason: `Withdrawal would result in CR ${potentialNewCR.toFixed(1)}% below protocol minimum ${minCRCheck}%`,
+          reason: `${cdp.assetType} withdrawal would result in CR ${potentialNewCR.toFixed(1)}% below protocol minimum ${minCRCheck}%`,
         };
       }
 
@@ -219,7 +219,7 @@ export class StrategyEngineService extends BaseService {
         adjustmentAmount: safeWithdrawAmount,
         targetCR: assetStrategy.targetCR,
         currentCR,
-        reason: `CR ${currentCR}% above max ${assetStrategy.maxCR}%. Withdrawing ${Number(safeWithdrawAmount) / 1_000_000} ADA to reach ${potentialNewCR.toFixed(1)}%`,
+        reason: `${cdp.assetType} CR ${currentCR}% above max ${assetStrategy.maxCR}%. Withdrawing ${Number(safeWithdrawAmount) / 1_000_000} ADA to reach ${potentialNewCR.toFixed(1)}%`,
       };
 
     } catch (error) {
@@ -298,7 +298,7 @@ export class StrategyEngineService extends BaseService {
           adjustmentAmount: actualDepositAmount,
           targetCR: assetStrategy.targetCR,
           currentCR,
-          reason: `CR ${currentCR}% below min ${assetStrategy.minCR}%. Depositing ${Number(actualDepositAmount) / 1_000_000} ADA (available balance: ${Number(availableForDeposit) / 1_000_000} ADA) to reach ${newCR.toFixed(1)}%`,
+          reason: `${cdp.assetType} CR ${currentCR}% below min ${assetStrategy.minCR}%. Depositing ${Number(actualDepositAmount) / 1_000_000} ADA (available balance: ${Number(availableForDeposit) / 1_000_000} ADA) to reach ${newCR.toFixed(1)}%`,
         };
 
       } catch (balanceError) {
@@ -462,7 +462,6 @@ export class StrategyEngineService extends BaseService {
           walletAddress: maskAddress(walletAddress),
           error
         });
-        continue;
       }
     }
 
