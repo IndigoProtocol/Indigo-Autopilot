@@ -68,18 +68,6 @@ export class CDPManagerService extends BaseService {
         .getOne();
 
       if (!priceRecord) {
-        const latestSlotResult = await this.priceRepository
-          .createQueryBuilder('price')
-          .select(['price.asset', 'price.slot'])
-          .orderBy('price.slot', 'DESC')
-          .limit(1)
-          .getOne();
-        
-        logger.warn('No price data found for asset', { 
-          asset,
-          latestSlotInDB: latestSlotResult?.slot || 'no data',
-          assetName: latestSlotResult?.asset || 'none'
-        });
         return null;
       }
 
@@ -119,11 +107,6 @@ export class CDPManagerService extends BaseService {
             .getOne();
           
           prices[asset] = BigInt(0);
-          logger.warn('No price data found for asset, using 0:', { 
-            asset,
-            latestSlotInDB: latestSlotResult?.slot || 'no data',
-            assetName: latestSlotResult?.asset || 'none'
-          });
         }
       }
 
@@ -186,9 +169,6 @@ export class CDPManagerService extends BaseService {
         return addressDetails.paymentCredential.hash;
       }
       
-      logger.warn('No payment credential hash found in address', { 
-        address: maskAddress(bech32Address) 
-      });
       return null;
 
     } catch (error) {

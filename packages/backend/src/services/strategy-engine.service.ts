@@ -50,9 +50,6 @@ export class StrategyEngineService extends BaseService {
   async evaluateStrategy(userStrategy: IUserStrategy, currentPrices?: IAssetPrices): Promise<IStrategyAction[]> {
     return this.executeAsync('evaluateStrategy', async () => {
       if (!userStrategy.enabled) {
-        logger.info('Strategy is disabled for user', { 
-          walletAddress: maskAddress(userStrategy.walletAddress) 
-        });
         return [];
       }
 
@@ -63,9 +60,6 @@ export class StrategyEngineService extends BaseService {
 
       const userCDPs = await this.cdpManager.getUserCDPs(userStrategy.walletAddress);
       if (userCDPs.length === 0) {
-        logger.info('No CDPs found for user', { 
-          walletAddress: maskAddress(userStrategy.walletAddress) 
-        });
         return [];
       }
 
@@ -134,7 +128,9 @@ export class StrategyEngineService extends BaseService {
       }
 
     } catch (error) {
-      logger.error('❌ Failed to evaluate CDP strategy:', { cdpId: cdp.cdpId, error });
+      if (error instanceof Error && !error.message.includes('No price data')) {
+        logger.error('❌ Failed to evaluate CDP strategy:', { cdpId: cdp.cdpId, error });
+      }
       return {
         type: 'NO_ACTION',
         cdpId: cdp.cdpId,

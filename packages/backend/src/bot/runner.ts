@@ -1,9 +1,9 @@
 import { IUserStrategy, IStrategyAction } from '@cdp-bot/shared';
 import { StrategyEngineService, CDPManagerService, WalletManagerService, serviceRegistry } from '../services';
 import logger from '../utils/logger';
-import { maskAddress, formatPricesForLogging } from '../utils/common';
+import { maskAddress, formatPricesForLogging, getAssetPrice } from '../utils/common';
 import * as cron from 'node-cron';
-import { reloadEnvironmentVariables, logStrategyAndCDPStatus } from '../utils/bot-utils';
+import { reloadEnvironmentVariables } from '../utils/bot-utils';
 
 export class BotRunner {
   private _strategyEngine?: StrategyEngineService;
@@ -91,32 +91,39 @@ export class BotRunner {
     try {
       const currentPrices = await this.cdpManager.getCurrentPrices();
       if (!currentPrices) {
-        logger.error('Unable to fetch current prices, skipping cycle');
+        logger.error('❌ Unable to fetch current prices, skipping cycle');
         return;
       }
 
       const activeStrategies = await this.loadActiveStrategies();
       if (activeStrategies.length === 0) {
-        logger.info('No active strategies found, skipping cycle');
+        logger.error('❌ No active strategies found, skipping cycle');
         return;
       }
 
-      await logStrategyAndCDPStatus(activeStrategies, currentPrices, {
-        cdpManager: this.cdpManager,
-        walletManager: this.walletManager
-      });
+      const totalAssets = activeStrategies.reduce((sum, s) => 
+        sum + Object.keys(s.assetStrategies).filter(asset => s.assetStrategies[asset].enabled).length, 0
+      );
+      logger.info(`AUTOPILOT STATUS - Monitoring ${activeStrategies.length} wallet(s) with ${totalAssets} active asset strategies`);
+      
+      const priceDisplay = [
+        `iUSD: ₳${(Number(currentPrices.iUSD) / 1_000_000).toFixed(6)}`,
+        `iBTC: ₳${(Number(currentPrices.iBTC) / 1_000_000).toFixed(2)}`,
+        `iETH: ₳${(Number(currentPrices.iETH) / 1_000_000).toFixed(2)}`,
+        `iSOL: ₳${(Number(currentPrices.iSOL) / 1_000_000).toFixed(2)}`
+      ].join(' | ');
+      logger.info(`PRICES - ${priceDisplay}`);
 
       const cycleResults: any[] = [];
+      let totalActionsExecuted = 0;
 
       for (const strategy of activeStrategies) {
         try {
           const result = await this.processUserStrategy(strategy, currentPrices);
           cycleResults.push(result);
+          totalActionsExecuted += result.actionsExecuted;
         } catch (error) {
-                logger.error('Failed to process user strategy', {
-        walletAddress: maskAddress(strategy.walletAddress),
-        error
-      });
+          logger.error(`❌ Strategy processing failed for ${maskAddress(strategy.walletAddress)}`);
           cycleResults.push({
             walletAddress: strategy.walletAddress,
             success: false,
@@ -126,18 +133,14 @@ export class BotRunner {
         }
       }
 
-      const successfulStrategies = cycleResults.filter(r => r.success).length;
-      const totalActionsExecuted = cycleResults.reduce((sum, r) => sum + r.actionsExecuted, 0);
-
-      logger.info('Bot cycle completed', {
-        totalStrategies: activeStrategies.length,
-        successfulStrategies,
-        totalActionsExecuted,
-        prices: formatPricesForLogging(currentPrices)
-      });
+      if (totalActionsExecuted > 0) {
+        logger.info(`CYCLE COMPLETE - ${totalActionsExecuted} actions executed across ${activeStrategies.length} strategies | Next check in 2 minutes`);
+      } else {
+        logger.info(`CYCLE COMPLETE - All CDPs within target ranges | Next check in 2 minutes`);
+      }
 
     } catch (error) {
-      logger.error('Bot cycle failed:', error);
+      logger.error('❌ Bot cycle failed');
     }
   }
 
@@ -146,7 +149,31 @@ export class BotRunner {
    */
   private async processUserStrategy(strategy: IUserStrategy, currentPrices: any): Promise<any> {
     try {
+      const userCDPs = await this.cdpManager.getUserCDPs(strategy.walletAddress);
+      const balanceResult = await this.walletManager.getWalletBalance(strategy.walletAddress);
 
+      const enabledAssets = Object.entries(strategy.assetStrategies)
+        .filter(([_, assetStrategy]) => assetStrategy.enabled)
+        .map(([asset, _]) => asset);
+
+      let totalCollateral = 0;
+      let totalDebtUSD = 0;
+
+      for (const cdp of userCDPs) {
+        const assetPrice = getAssetPrice(cdp.assetType, currentPrices);
+        const collateralADA = Number(cdp.collateralAmount) / 1_000_000;
+        const debtAmount = Number(cdp.mintedAmount) / 1_000_000;
+        const debtValueUSD = debtAmount * (Number(assetPrice) / 1_000_000);
+        
+        totalCollateral += collateralADA;
+        totalDebtUSD += debtValueUSD;
+      }
+
+      logger.info(`PORTFOLIO ${maskAddress(strategy.walletAddress)} - Balance: ${balanceResult.ada.toFixed(2)} ADA | Collateral: ${totalCollateral.toFixed(2)} ADA | Debt: $${totalDebtUSD.toFixed(2)} | Assets: ${enabledAssets.join(', ')}`);
+
+      for (const cdp of userCDPs) {
+        this.logCDPStatus(cdp, strategy, currentPrices);
+      }
 
       const actions: IStrategyAction[] = await this.strategyEngine.evaluateStrategy(strategy, currentPrices);
       
@@ -164,10 +191,6 @@ export class BotRunner {
       });
       
       if (executableActions.length === 0) {
-              logger.info('NO executable actions for user CDPs', {
-        walletAddress: maskAddress(strategy.walletAddress),
-        reasons: actions.map(a => a.reason).filter(Boolean)
-      });
         return {
           walletAddress: strategy.walletAddress,
           success: true,
@@ -186,11 +209,45 @@ export class BotRunner {
       };
 
     } catch (error) {
-      logger.error('Failed to process user strategy:', {
-        walletAddress: maskAddress(strategy.walletAddress),
-        error
-      });
+      logger.error(`❌ Strategy processing failed for ${maskAddress(strategy.walletAddress)}`);
       throw error;
+    }
+  }
+
+  /**
+   * Log CDP status and any required actions
+   */
+  private logCDPStatus(cdp: any, strategy: IUserStrategy, prices: any): void {
+    const assetStrategy = strategy.assetStrategies[cdp.assetType];
+    if (!assetStrategy || !assetStrategy.enabled) return;
+
+    const assetPrice = getAssetPrice(cdp.assetType, prices);
+    const currentCR = this.cdpManager.calculateCurrentCR(
+      cdp.collateralAmount,
+      cdp.mintedAmount,
+      assetPrice
+    );
+
+    const collateralADA = (Number(cdp.collateralAmount) / 1_000_000).toFixed(2);
+    const debtAmount = (Number(cdp.mintedAmount) / 1_000_000).toFixed(6);
+    
+    let action = '✅ MONITOR';
+    let reason = 'CR within target range';
+    
+    if (currentCR > assetStrategy.maxCR) {
+      action = '📉 WITHDRAW COLLATERAL';
+      reason = `CR ${currentCR.toFixed(1)}% > max ${assetStrategy.maxCR}%`;
+    } else if (currentCR < assetStrategy.minCR) {
+      action = '📈 ADD COLLATERAL';
+      reason = `CR ${currentCR.toFixed(1)}% < min ${assetStrategy.minCR}%`;
+    }
+
+    const crDisplay = `${currentCR.toFixed(1)}% (Target: ${assetStrategy.targetCR}%, Range: ${assetStrategy.minCR}%-${assetStrategy.maxCR}%)`;
+    
+    if (action.includes('MONITOR')) {
+      logger.info(`${cdp.assetType} CDP - ${collateralADA} ADA → ${debtAmount} ${cdp.assetType} | CR: ${crDisplay} | ${action}`);
+    } else {
+      logger.info(`CDP ACTION - ${cdp.assetType}: ${reason} | Collateral: ${collateralADA} ADA | Debt: ${debtAmount} ${cdp.assetType} | ${action}`);
     }
   }
 
@@ -199,23 +256,25 @@ export class BotRunner {
    */
   private async executeActions(actions: IStrategyAction[], walletAddress: string): Promise<string[]> {
     try {
-      logger.info('Executing strategy actions', {
-        actionCount: actions.length,
-        walletAddress: maskAddress(walletAddress),
-        actions: actions.map(a => ({
-          type: a.type,
-          cdpId: a.cdpId,
-          adjustmentAmount: a.adjustmentAmount?.toString()
-        }))
-      });
+      const txHashes = await this.strategyEngine.executeStrategyActions(actions, walletAddress);
+      
+      for (let i = 0; i < actions.length; i++) {
+        const action = actions[i];
+        const txHash = txHashes[i];
+        const actionType = action.type === 'WITHDRAW_COLLATERAL' ? 'WITHDREW' : 'DEPOSITED';
+        const amount = action.adjustmentAmount ? (Number(action.adjustmentAmount) / 1_000_000).toFixed(2) : 'N/A';
+        
+        if (txHash) {
+          logger.info(`CDP ACTION EXECUTED - ${actionType} ${amount} ADA for ${action.cdpId || 'Unknown'} | Tx: ${txHash.substring(0, 8)}...`);
+        } else {
+          logger.error(`CDP ACTION FAILED - ${actionType} for ${action.cdpId || 'Unknown'}: Transaction failed`);
+        }
+      }
 
-      return await this.strategyEngine.executeStrategyActions(actions, walletAddress);
+      return txHashes;
 
     } catch (error) {
-      logger.error('Failed to execute strategy actions:', {
-        walletAddress: maskAddress(walletAddress),
-        error
-      });
+      logger.error(`❌ Action execution failed for ${maskAddress(walletAddress)}`);
       return [];
     }
   }
@@ -235,7 +294,7 @@ export class BotRunner {
           
           const walletAddress = strategyConfig.walletAddress;
           if (!walletAddress) {
-            logger.warn('Strategy missing walletAddress, skipping', { envKey: key });
+            logger.warn('Strategy missing walletAddress, skipping');
             continue;
           }
           
@@ -247,9 +306,6 @@ export class BotRunner {
 
           if (Object.keys(strategy.assetStrategies).length === 0 && 
               (strategyConfig.minCR || strategyConfig.maxCR || strategyConfig.targetCR)) {
-            logger.warn('Converting legacy strategy format to per-asset format', {
-              walletAddress: maskAddress(walletAddress)
-            });
             
             const assets = strategyConfig.enabledAssets;
             for (const asset of assets) {
@@ -264,20 +320,14 @@ export class BotRunner {
 
           const validation = this.strategyEngine.validateStrategy(strategy);
           if (!validation.isValid) {
-            logger.warn('Invalid strategy configuration, skipping', {
-              walletAddress: maskAddress(walletAddress),
-              errors: validation.errors
-            });
+            logger.warn(`Invalid strategy configuration for ${maskAddress(walletAddress)}, skipping`);
             continue;
           }
 
           strategies.push(strategy);
 
         } catch (error) {
-          logger.error('Failed to parse strategy configuration', {
-            envKey: key,
-            error: error instanceof Error ? error.message : String(error)
-          });
+          logger.error('Failed to parse strategy configuration');
         }
       }
     }
