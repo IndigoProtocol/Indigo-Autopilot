@@ -99,13 +99,6 @@ export class CDPManagerService extends BaseService {
           prices[asset] = priceData.price;
           foundPrices++;
         } else {
-          const latestSlotResult = await this.priceRepository
-            .createQueryBuilder('price')
-            .select(['price.slot', 'price.asset'])
-            .orderBy('price.slot', 'DESC')
-            .limit(1)
-            .getOne();
-          
           prices[asset] = BigInt(0);
         }
       }

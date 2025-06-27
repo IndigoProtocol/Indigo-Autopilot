@@ -253,6 +253,7 @@ export class StrategyEngineService extends BaseService {
       const depositAmount = calculation.adjustmentAmount > 0 ? calculation.adjustmentAmount : BigInt(0);
       
       if (depositAmount <= 0) {
+        logger.info(`❌ ${cdp.assetType} CDP - Calculated deposit amount is not positive: ${depositAmount}`);
         return {
           type: 'NO_ACTION',
           cdpId: cdp.cdpId,
@@ -265,6 +266,8 @@ export class StrategyEngineService extends BaseService {
       const maxTransactionAmount = maxTransactionValue;
       const safeDepositAmount: bigint = depositAmount > maxTransactionAmount ? maxTransactionAmount : depositAmount;
 
+      logger.info(`💰 ${cdp.assetType} CDP - Deposit calculation: need ${Number(depositAmount) / 1_000_000} ADA`);
+
       try {
         const balanceCheckAddress = strategyWalletAddress || cdp.walletAddress;
         
@@ -273,7 +276,10 @@ export class StrategyEngineService extends BaseService {
         const reserveForFees = BigInt(2_000_000);
         const availableForDeposit = walletBalance.lovelace > reserveForFees ? walletBalance.lovelace - reserveForFees : BigInt(0);
 
+        logger.info(`💳 ${cdp.assetType} BALANCE CHECK - Total: ${Number(walletBalance.lovelace) / 1_000_000} ADA | Available: ${Number(availableForDeposit) / 1_000_000} ADA | Need: ${Number(safeDepositAmount) / 1_000_000} ADA`);
+
         if (safeDepositAmount > availableForDeposit) {
+          logger.warn(`❌ ${cdp.assetType} INSUFFICIENT BALANCE - Need ${Number(safeDepositAmount) / 1_000_000} ADA, available ${Number(availableForDeposit) / 1_000_000} ADA`);
           return {
             type: 'NO_ACTION',
             cdpId: cdp.cdpId,
@@ -287,6 +293,8 @@ export class StrategyEngineService extends BaseService {
         
         const newCollateral = cdp.collateralAmount + actualDepositAmount;
         const newCR = this.cdpManager.calculateCurrentCR(newCollateral, cdp.mintedAmount, assetPrice);
+
+        logger.info(`✅ ${cdp.assetType} DEPOSIT ACTION CREATED - Will deposit ${Number(actualDepositAmount) / 1_000_000} ADA to reach ${newCR.toFixed(1)}% CR`);
 
         return {
           type: 'DEPOSIT_COLLATERAL',

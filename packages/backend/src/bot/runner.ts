@@ -1,7 +1,7 @@
 import { IUserStrategy, IStrategyAction } from '@cdp-bot/shared';
 import { StrategyEngineService, CDPManagerService, WalletManagerService, serviceRegistry } from '../services';
 import logger from '../utils/logger';
-import { maskAddress, formatPricesForLogging, getAssetPrice } from '../utils/common';
+import { maskAddress, getAssetPrice } from '../utils/common';
 import * as cron from 'node-cron';
 import { reloadEnvironmentVariables } from '../utils/bot-utils';
 
@@ -136,7 +136,24 @@ export class BotRunner {
       if (totalActionsExecuted > 0) {
         logger.info(`CYCLE COMPLETE - ${totalActionsExecuted} actions executed across ${activeStrategies.length} strategies | Next check in 2 minutes`);
       } else {
-        logger.info(`CYCLE COMPLETE - All CDPs within target ranges | Next check in 2 minutes`);
+        // Check if any actions were blocked due to constraints
+        let totalActionsNeeded = 0;
+        let totalBlockedActions = 0;
+        
+        for (const result of cycleResults) {
+          if (result.actionsGenerated) {
+            totalActionsNeeded += result.actionsGenerated;
+          }
+          if (result.actionsBlocked) {
+            totalBlockedActions += result.actionsBlocked;
+          }
+        }
+        
+        if (totalBlockedActions > 0) {
+          logger.info(`CYCLE COMPLETE - ${totalBlockedActions} actions needed but blocked (insufficient balance/constraints) | Next check in 2 minutes`);
+        } else {
+          logger.info(`CYCLE COMPLETE - All CDPs within target ranges | Next check in 2 minutes`);
+        }
       }
 
     } catch (error) {
@@ -177,11 +194,18 @@ export class BotRunner {
 
       const actions: IStrategyAction[] = await this.strategyEngine.evaluateStrategy(strategy, currentPrices);
       
+      logger.info(`ACTIONS GENERATED - Total: ${actions.length}`);
+      for (const action of actions) {
+        logger.info(`  ${action.type}: ${action.reason}`);
+      }
+      
       if (actions.length === 0) {
         return {
           walletAddress: strategy.walletAddress,
           success: true,
           actionsExecuted: 0,
+          actionsGenerated: 0,
+          actionsBlocked: 0,
           message: 'No actions required'
         };
       }
@@ -190,12 +214,24 @@ export class BotRunner {
         return action.type !== 'NO_ACTION';
       });
       
+      const blockedActions = actions.filter(action => {
+        return action.type === 'NO_ACTION' && action.reason && (
+          action.reason.includes('Insufficient') || 
+          action.reason.includes('balance') ||
+          action.reason.includes('emergency stop')
+        );
+      });
+      
+      logger.info(`EXECUTABLE ACTIONS - Total: ${executableActions.length} (filtered from ${actions.length})`);
+      
       if (executableActions.length === 0) {
         return {
           walletAddress: strategy.walletAddress,
           success: true,
           actionsExecuted: 0,
-          message: 'All CDPs within acceptable range'
+          actionsGenerated: actions.length,
+          actionsBlocked: blockedActions.length,
+          message: blockedActions.length > 0 ? 'Actions blocked by constraints' : 'All CDPs within acceptable range'
         };
       }
 
@@ -205,6 +241,8 @@ export class BotRunner {
         walletAddress: strategy.walletAddress,
         success: true,
         actionsExecuted: executableActions.length,
+        actionsGenerated: actions.length,
+        actionsBlocked: blockedActions.length,
         txHashes,
       };
 
